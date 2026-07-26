@@ -47,7 +47,7 @@ in {
       deps = ["users"];
       text = ''
         mkdir -p /var/lib/github-runner
-        echo -n "${secrets.githubToken}" > /var/lib/github-runner/token
+        echo -n "${secrets.githubRunnerToken}" > /var/lib/github-runner/token
         chmod 600 /var/lib/github-runner/token
         chown github-runner-gymbros /var/lib/github-runner/token
       '';

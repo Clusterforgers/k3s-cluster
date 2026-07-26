@@ -14,24 +14,11 @@ This repo provides reusable NixOS/home-manager modules. The actual deployable se
 | `modules/server.nix` | K3s control plane config + Tailscale hardening, apply to the server with `"role": "control-plane"` |
 | `modules/agent.nix` | K3s worker node config + Tailscale hardening, joins the control plane via Tailscale |
 | `modules/deployments.nix` | Core cluster infrastructure (Prometheus, ArgoCD) bootstrapped onto the control plane |
+| `modules/transposition.nix` | Teaches flake-parts how to merge `homeModules` across files — it doesn't know about Home Manager natively |
 
 ## Network & SSH model
 
-Every node running `kubernetes-server` or `kubernetes-agent` gets Tailscale enabled with `tailscale0` marked as a trusted firewall interface. There's no separate OpenSSH — **Tailscale SSH** (`tailscale up --ssh`, run once per node — see bootstrap steps below) handles all SSH, both interactive logins and the automated `nixos-rebuild --target-host`/`--build-host` build path. Access is gated by your tailnet's ACLs (the `ssh` grant), not key management — make sure your tailnet ACL policy actually grants `ssh` to the users/hosts that need it, that part's on the Tailscale admin console, not NixOS.
-
-Tailscale SSH has a known open bug where it can corrupt Nix's remote-store handshake (`nix-store --serve` protocol mismatch) when ssh connection-multiplexing kicks in — see [tailscale/tailscale#14093](https://github.com/tailscale/tailscale/issues/14093). It's intermittent (Tailscale's own engineer couldn't reproduce it in clean testing) and has a confirmed workaround: disabling `ControlMaster`. Both `ssh.nix` (the generated `~/.ssh/config`) and `client.nix` (the `rebuild-*`/`update-*` aliases, via `NIX_SSHOPTS`) set `ControlMaster no` defensively so this shouldn't bite you. If a rebuild ever fails with that protocol-mismatch error anyway, that GitHub issue is the first place to check for updates.
-
-`ssh.nix`'s generated aliases point at each server's `tailscaleIp`, so once a node is bootstrapped, all SSH/build/rebuild traffic to it flows over Tailscale exclusively — nothing needs the public IP after the initial bootstrap.
-
----
-
-## Common Pitfalls
-
-These bit us during initial setup — worth checking first if something that used to work suddenly errors.
-
-- **`nixos-rebuild` says a field is missing that you just fixed, or a change you just pushed doesn't seem to be there.** `github:owner/repo` flake refs (no pinned commit) are cached locally for up to an hour by Nix's tarball TTL. If you (or a collaborator) just pushed to `k3s-cluster` or `servers` and a rebuild doesn't reflect it, add `--refresh` to force a fresh fetch instead of waiting out the cache.
-- **Any flake that consumes this repo pins an exact commit in its `flake.lock`** — pushing a change here does nothing for `servers` (or your personal nixos flake, if it also depends on `k3s-cluster` directly) until you run `nix flake lock --update-input k3s-cluster` there too, and push/rebuild. This has bitten us more than once: the fix landing here feels done, but the consumer is still building the old commit.
-- **`rebuild-<name>`/`update-<name>` need `NIXOS_SECRETS_PATH` set** (pointing at your local `secrets.nix`) because `kubernetes-server` reads `secrets.githubToken` for the GymBros CI runner — even if you're not touching CI at all, the module evaluates it unconditionally. If you're only using `kubectl`/`k9s`/`fetch-kubeconfig` (not deploying to servers yourself), you don't need this set. If you are deploying, set it persistently via `home.sessionVariables.NIXOS_SECRETS_PATH` in your own home-manager profile — a plain shell `export`/`set -gx` only lasts for that terminal session and won't survive into new ones without it.
+Every node running `kubernetes-server` or `kubernetes-agent` gets Tailscale enabled with `tailscale0` marked as a trusted firewall interface. **Tailscale SSH** (`tailscale up --ssh`, run once per node — see bootstrap steps below) handles all SSH, both interactive logins and the automated `nixos-rebuild --target-host`/`--build-host` build path.
 
 ---
 
