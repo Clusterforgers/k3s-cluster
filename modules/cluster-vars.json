@@ -1,0 +1,15 @@
+{
+  "kubernetesVersion": "v1.30.0+k3s1",
+  "servers": [
+    {
+      "name": "oracle",
+      "nixosAttr": "oracle",
+      "sshAlias": "oracle-server",
+      "ip": "158.180.42.198",
+      "vcnIp": "10.0.0.93",
+      "tailscaleIp": "100.81.239.16",
+      "sshUser": "root",
+      "role": "control-plane"
+    }
+  ]
+}
