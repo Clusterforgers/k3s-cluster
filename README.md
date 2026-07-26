@@ -25,6 +25,16 @@ Tailscale SSH has a known open bug where it can corrupt Nix's remote-store hands
 
 ---
 
+## Common Pitfalls
+
+These bit us during initial setup — worth checking first if something that used to work suddenly errors.
+
+- **`nixos-rebuild` says a field is missing that you just fixed, or a change you just pushed doesn't seem to be there.** `github:owner/repo` flake refs (no pinned commit) are cached locally for up to an hour by Nix's tarball TTL. If you (or a collaborator) just pushed to `k3s-cluster` or `servers` and a rebuild doesn't reflect it, add `--refresh` to force a fresh fetch instead of waiting out the cache.
+- **Any flake that consumes this repo pins an exact commit in its `flake.lock`** — pushing a change here does nothing for `servers` (or your personal nixos flake, if it also depends on `k3s-cluster` directly) until you run `nix flake lock --update-input k3s-cluster` there too, and push/rebuild. This has bitten us more than once: the fix landing here feels done, but the consumer is still building the old commit.
+- **`rebuild-<name>`/`update-<name>` need `NIXOS_SECRETS_PATH` set** (pointing at your local `secrets.nix`) because `kubernetes-server` reads `secrets.githubToken` for the GymBros CI runner — even if you're not touching CI at all, the module evaluates it unconditionally. If you're only using `kubectl`/`k9s`/`fetch-kubeconfig` (not deploying to servers yourself), you don't need this set. If you are deploying, set it persistently via `home.sessionVariables.NIXOS_SECRETS_PATH` in your own home-manager profile — a plain shell `export`/`set -gx` only lasts for that terminal session and won't survive into new ones without it.
+
+---
+
 ## Adding a New Server
 
 All server configuration lives in `modules/cluster-vars.json`. Append an entry to the `servers` array:
@@ -110,6 +120,8 @@ clean-<name>      # run nix garbage collection on the server
 ```sh
 fetch-kubeconfig <ssh-alias>
 ```
+
+If you're also going to run `rebuild-<name>`/`update-<name>` yourself (not just `kubectl`/`k9s`), see the `NIXOS_SECRETS_PATH` note under Common Pitfalls above.
 
 ---
 
