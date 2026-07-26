@@ -3,7 +3,7 @@ let
   vars = builtins.fromJSON (builtins.readFile ./cluster-vars.json);
   controlPlane = builtins.head (builtins.filter (s: s.role == "control-plane") vars.servers);
 in {
-  flake.nixosModules.kubernetes-server = { pkgs, secrets, config, ... }: {
+  flake.nixosModules.kubernetes-server = { pkgs, config, ... }: {
     services.tailscale.enable = true;
 
     networking.firewall.trustedInterfaces = ["tailscale0"];
@@ -35,34 +35,6 @@ in {
       daemon.settings.insecure-registries = ["${controlPlane.tailscaleIp}:30500"];
     };
 
-    services.github-runners.gymbros = {
-      enable = true;
-      url = "https://github.com/Clusterforgers/GymBros";
-      tokenFile = "/var/lib/github-runner/token";
-      # The old registration from Chrisser1/GymBros carried over in the repo transfer
-      # and collides on name with this one.
-      replace = true;
-      extraLabels = ["arm64"];
-      extraPackages = with pkgs; [docker git];
-    };
-
-    system.activationScripts.github-runner-token = {
-      deps = ["users"];
-      text = ''
-        mkdir -p /var/lib/github-runner
-        echo -n "${secrets.githubRunnerToken}" > /var/lib/github-runner/token
-        chmod 600 /var/lib/github-runner/token
-        chown github-runner-gymbros /var/lib/github-runner/token
-      '';
-    };
-
-    users.users."github-runner-gymbros" = {
-      isSystemUser = true;
-      group = "github-runner-gymbros";
-      extraGroups = ["docker"];
-    };
-    users.groups."github-runner-gymbros" = {};
-
     services.openiscsi = {
       enable = true;
       name = "iqn.2023-01.io.longhorn:${config.networking.hostName}";
@@ -73,7 +45,7 @@ in {
       "L+ /usr/local/bin - - - - /run/current-system/sw/bin/"
     ];
 
-    networking.firewall.allowedTCPPorts = [80 443 6443 10250 30500 3260];
+    networking.firewall.allowedTCPPorts = [80 443 6443 10250 3260];
     networking.firewall.allowedTCPPortRanges = [
       {
         from = 9500;
