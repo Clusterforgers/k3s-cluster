@@ -39,6 +39,9 @@ in {
       enable = true;
       url = "https://github.com/Clusterforgers/GymBros";
       tokenFile = "/var/lib/github-runner/token";
+      # The old registration from Chrisser1/GymBros carried over in the repo transfer
+      # and collides on name with this one.
+      replace = true;
       extraLabels = ["arm64"];
       extraPackages = with pkgs; [docker git];
     };
