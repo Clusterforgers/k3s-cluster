@@ -8,16 +8,6 @@ in {
 
     networking.firewall.trustedInterfaces = ["tailscale0"];
 
-    services.openssh = {
-      enable = true;
-      ports = [2222];
-      openFirewall = false;
-      settings = {
-        PasswordAuthentication = false;
-        PermitRootLogin = "prohibit-password";
-      };
-    };
-
     services.k3s = {
       enable = true;
       role = "agent";

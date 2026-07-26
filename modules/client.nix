@@ -10,11 +10,11 @@
   serverAliases = builtins.listToAttrs (builtins.concatLists (map (server: [
       {
         name = "rebuild-${server.name}";
-        value = "nixos-rebuild switch --flake ${serversFlake}#${server.nixosAttr} --target-host ${server.sshAlias} --build-host ${server.sshAlias} --impure";
+        value = "NIX_SSHOPTS='-o ControlMaster=no' nixos-rebuild switch --flake ${serversFlake}#${server.nixosAttr} --target-host ${server.sshAlias} --build-host ${server.sshAlias} --impure";
       }
       {
         name = "update-${server.name}";
-        value = "nix flake update ${serversFlake} && nixos-rebuild switch --flake ${serversFlake}#${server.nixosAttr} --target-host ${server.sshAlias} --build-host ${server.sshAlias} --impure";
+        value = "nix flake update ${serversFlake} && NIX_SSHOPTS='-o ControlMaster=no' nixos-rebuild switch --flake ${serversFlake}#${server.nixosAttr} --target-host ${server.sshAlias} --build-host ${server.sshAlias} --impure";
       }
       {
         name = "clean-${server.name}";

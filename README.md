@@ -11,21 +11,17 @@ This repo provides reusable NixOS/home-manager modules. The actual deployable se
 | `modules/cluster-vars.json` | Single source of truth for all servers (IPs, SSH aliases, roles) |
 | `modules/ssh.nix` | Generates SSH client config entries for every server in the list (routed over Tailscale) |
 | `modules/client.nix` | CLI tools + scripts for developer machines (`kubectl`, `k9s`, `fetch-kubeconfig`, `bootstrap-node`) |
-| `modules/server.nix` | K3s control plane config + Tailscale/SSH hardening, apply to the server with `"role": "control-plane"` |
-| `modules/agent.nix` | K3s worker node config + Tailscale/SSH hardening, joins the control plane via Tailscale |
+| `modules/server.nix` | K3s control plane config + Tailscale hardening, apply to the server with `"role": "control-plane"` |
+| `modules/agent.nix` | K3s worker node config + Tailscale hardening, joins the control plane via Tailscale |
 | `modules/deployments.nix` | Core cluster infrastructure (Prometheus, ArgoCD) bootstrapped onto the control plane |
 
 ## Network & SSH model
 
-Every node running `kubernetes-server` or `kubernetes-agent` gets:
+Every node running `kubernetes-server` or `kubernetes-agent` gets Tailscale enabled with `tailscale0` marked as a trusted firewall interface. There's no separate OpenSSH — **Tailscale SSH** (`tailscale up --ssh`, run once per node — see bootstrap steps below) handles all SSH, both interactive logins and the automated `nixos-rebuild --target-host`/`--build-host` build path. Access is gated by your tailnet's ACLs (the `ssh` grant), not key management — make sure your tailnet ACL policy actually grants `ssh` to the users/hosts that need it, that part's on the Tailscale admin console, not NixOS.
 
-- Tailscale enabled, with `tailscale0` marked as a trusted firewall interface.
-- OpenSSH moved to port `2222`, with `openFirewall = false` — it's only reachable over Tailscale (trusted interfaces bypass the firewall regardless of port). Key-based auth only (`PasswordAuthentication = false`), used for automated `nixos-rebuild --target-host`/`--build-host` and `nix copy`.
-- **Tailscale SSH** (`tailscale up --ssh`, run once per node — see bootstrap steps below) for interactive human logins, gated by your tailnet's ACLs instead of key management. Tailscale SSH claims port 22 on the node's Tailscale IP specifically, which is why OpenSSH lives on 2222 — the two coexist without conflict since they bind different ports.
+Tailscale SSH has a known open bug where it can corrupt Nix's remote-store handshake (`nix-store --serve` protocol mismatch) when ssh connection-multiplexing kicks in — see [tailscale/tailscale#14093](https://github.com/tailscale/tailscale/issues/14093). It's intermittent (Tailscale's own engineer couldn't reproduce it in clean testing) and has a confirmed workaround: disabling `ControlMaster`. Both `ssh.nix` (the generated `~/.ssh/config`) and `client.nix` (the `rebuild-*`/`update-*` aliases, via `NIX_SSHOPTS`) set `ControlMaster no` defensively so this shouldn't bite you. If a rebuild ever fails with that protocol-mismatch error anyway, that GitHub issue is the first place to check for updates.
 
-We don't use Tailscale SSH for the automated build/rebuild path: it doesn't interoperate with Nix's remote-store protocol yet ([tailscale/tailscale#14167](https://github.com/tailscale/tailscale/issues/14167)), so `nix copy`/`nixos-rebuild` over it fails with a `nix-store --serve` protocol mismatch. Both paths are Tailscale-only regardless — it's just the auth mechanism for the build path that stays key-based until that upstream bug is fixed.
-
-`ssh.nix`'s generated aliases point at each server's `tailscaleIp:2222`, so once a node is bootstrapped, all SSH/build/rebuild traffic to it flows over Tailscale exclusively — nothing needs the public IP after the initial bootstrap.
+`ssh.nix`'s generated aliases point at each server's `tailscaleIp`, so once a node is bootstrapped, all SSH/build/rebuild traffic to it flows over Tailscale exclusively — nothing needs the public IP after the initial bootstrap.
 
 ---
 
@@ -55,7 +51,7 @@ All server configuration lives in `modules/cluster-vars.json`. Append an entry t
 | `sshUser` | SSH user for the server (usually `root`) |
 | `role` | `"control-plane"` or `"agent"`, scripts use this to find the right server automatically |
 
-There is no `sshKey` field — auth uses whatever default identity/agent each operator already has authorized on the server (see `secrets.sshKeys` in the `servers` repo). Nothing operator-specific belongs in this file; it's meant to be shared as-is between everyone working on the cluster.
+There is no `sshKey` field — auth is via Tailscale SSH, gated by tailnet ACLs, not by keys. Nothing operator-specific belongs in this file; it's meant to be shared as-is between everyone working on the cluster.
 
 After editing, run `rebuild` on your local machine to apply the new SSH config and generate the new aliases.
 
@@ -65,7 +61,7 @@ After editing, run `rebuild` on your local machine to apply the new SSH config a
 
 A freshly provisioned server isn't on the tailnet yet, so the very first connection has to go over its **public IP**, not the Tailscale alias. Everything after that first `nixos-rebuild` switches to Tailscale-only.
 
-**Step 1 — Add the server to `modules/cluster-vars.json`** in this repo, and add its NixOS host config to `Clusterforgers/servers` (a directory importing `self.nixosModules.kubernetes-server` or `.kubernetes-agent`). Add its SSH public key to `secrets.nix`.
+**Step 1 — Add the server to `modules/cluster-vars.json`** in this repo, and add its NixOS host config to `Clusterforgers/servers` (a directory importing `self.nixosModules.kubernetes-server` or `.kubernetes-agent`).
 
 **Step 2 — Copy the `servers` flake to the server, over its public IP:**
 ```sh
@@ -88,10 +84,11 @@ ssh root@<public-ip> 'chown -R root:root /tmp/servers && NIXOS_SECRETS_PATH=/roo
 ssh root@<public-ip> 'hostname <nixosAttr>'
 ```
 
-**Step 6 — Bring up Tailscale SSH** (this is the step that makes interactive login key-less going forward):
+**Step 6 — Bring up Tailscale SSH** (this is the step that makes the node reachable at all going forward — there's no OpenSSH fallback):
 ```sh
 ssh root@<public-ip> 'tailscale up --ssh'
 ```
+Make sure the operator's tailnet identity has an `ssh` grant in the ACL policy before relying on this — otherwise Tailscale SSH will refuse the connection.
 
 **Step 7 — All future deploys work normally, over Tailscale only:**
 ```sh
