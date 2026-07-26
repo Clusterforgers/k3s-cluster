@@ -37,7 +37,7 @@ in {
 
     services.github-runners.gymbros = {
       enable = true;
-      url = "https://github.com/Chrisser1/GymBros";
+      url = "https://github.com/Clusterforgers/GymBros";
       tokenFile = "/var/lib/github-runner/token";
       extraLabels = ["arm64"];
       extraPackages = with pkgs; [docker git];
