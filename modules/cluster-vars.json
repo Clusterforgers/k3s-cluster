@@ -16,7 +16,7 @@
       "nixosAttr": "queen",
       "sshAlias": "queen",
       "ip": "192.168.50.187",
-      "tailscaleIp": "<queen-tailscale-ip>",
+      "tailscaleIp": "100.96.184.94",
       "sshUser": "root",
       "role": "agent"
     }
