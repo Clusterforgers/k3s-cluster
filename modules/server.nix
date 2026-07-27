@@ -16,6 +16,7 @@ in {
         "--disable=local-storage"
         "--tls-san ${controlPlane.ip}"
         "--tls-san ${controlPlane.tailscaleIp}"
+        "--advertise-address ${controlPlane.tailscaleIp}"
         "--node-ip ${controlPlane.tailscaleIp}"
         "--node-external-ip ${controlPlane.vcnIp}"
         "--flannel-iface tailscale0"
