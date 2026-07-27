@@ -10,6 +10,15 @@
       "tailscaleIp": "100.81.239.16",
       "sshUser": "root",
       "role": "control-plane"
+    },
+    {
+      "name": "queen",
+      "nixosAttr": "queen",
+      "sshAlias": "queen",
+      "ip": "192.168.50.187",
+      "tailscaleIp": "<queen-tailscale-ip>",
+      "sshUser": "root",
+      "role": "agent"
     }
   ]
 }
