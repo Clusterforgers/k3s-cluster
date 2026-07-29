@@ -51,3 +51,58 @@ All server configuration lives in `modules/cluster-vars.json`. Append an entry t
 After editing, run `rebuild` on your local machine to apply the new SSH config and generate the new aliases.
 
 ---
+
+## Moving the Control Plane
+
+This cluster uses k3s's embedded SQLite datastore, no etcd, no HA. That means all cluster state, every namespace, Secret, Longhorn volume record, and the node join token, lives in one directory on whichever node has `"role": "control-plane"`: `/var/lib/rancher/k3s/server`. Moving the control plane means relocating that directory to the new node, not bootstrapping a fresh cluster and restoring apps into it. Done this way, there's no ArgoCD resync and no per-app data restore to do, the existing cluster just continues running on new hardware, and agents rejoin with the token they already have.
+
+**Do the config edit first, but don't rebuild anything until Step 6** — the old node keeps serving as control-plane while you stage the copy.
+
+**Step 1 — Update `cluster-vars.json`** with the new node's role flipped to `"control-plane"` (and the old one to `"agent"`).
+
+**Step 2 — Stop k3s on the old control-plane node:**
+```sh
+ssh <old-sshAlias> 'systemctl stop k3s'
+```
+
+**Step 3 — Pull the datastore off the old node as a local safety-net backup:**
+```sh
+ssh <old-sshAlias> 'tar czf /root/k3s-server-backup.tar.gz -C /var/lib/rancher/k3s server'
+scp <old-sshAlias>:/root/k3s-server-backup.tar.gz ~/k3s-server-backup.tar.gz
+```
+Keep this tarball until the new control plane is verified healthy, it's the rollback path.
+
+**Step 4 — Stop k3s on the new node** (it may already be running as an agent):
+```sh
+ssh <new-sshAlias> 'systemctl stop k3s'
+```
+
+**Step 5 — Copy the datastore onto the new node:**
+```sh
+scp ~/k3s-server-backup.tar.gz <new-sshAlias>:/root/
+ssh <new-sshAlias> 'mkdir -p /var/lib/rancher/k3s && tar xzf /root/k3s-server-backup.tar.gz -C /var/lib/rancher/k3s'
+```
+
+**Step 6 — Apply the role swap and rebuild the new control plane:**
+```sh
+update-<new-name>   # or rebuild-<new-name> if the flake lock is already current
+```
+k3s comes up in server mode on the copied datastore, same cluster CA, certs, node token, and objects as before. Its TLS listener automatically adds the new node's `ip`/`tailscaleIp` as SANs from the flags already in `server.nix`, no manual cert regeneration needed.
+
+**Step 7 — Verify before touching the old node:**
+```sh
+fetch-kubeconfig <new-sshAlias>
+k9s   # confirm both nodes, all namespaces, and all workloads are present
+```
+
+**Step 8 — Rebuild the old node as an agent:**
+```sh
+update-<old-name>
+```
+The join token came along with the copied datastore, so the old node rejoins with the *same* token it always had, no need to re-run `bootstrap-node`.
+
+**Step 9 — Clean up.** The old node's `/var/lib/rancher/k3s/server` directory is now unused (agent state lives under `/var/lib/rancher/k3s/agent` instead) and can be removed once the cutover looks stable. Delete the local backup tarball once you're satisfied, or keep it somewhere safe a while longer.
+
+Longhorn volume *data* isn't part of any of this, it's already replicated independently across nodes and unaffected by which node runs the API server.
+
+---

@@ -18,7 +18,7 @@ in {
         "--tls-san ${controlPlane.tailscaleIp}"
         "--advertise-address ${controlPlane.tailscaleIp}"
         "--node-ip ${controlPlane.tailscaleIp}"
-        "--node-external-ip ${controlPlane.vcnIp}"
+        "--node-external-ip ${controlPlane.vcnIp or controlPlane.tailscaleIp}"
         "--flannel-iface tailscale0"
       ];
     };
