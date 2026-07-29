@@ -50,15 +50,28 @@ All server configuration lives in `modules/cluster-vars.json`. Append an entry t
 
 After editing, run `rebuild` on your local machine to apply the new SSH config and generate the new aliases.
 
+`rebuild-<name>` and `update-<name>` both target `github:Clusterforgers/servers`, an unpinned flake ref, with `--refresh` so they always fetch its latest commit rather than a stale locally-cached tarball (Nix caches unpinned `github:` refs for up to an hour otherwise). The difference between them is `k3s-cluster`, not `servers`:
+- `rebuild-<name>` deploys whatever `k3s-cluster` commit is currently locked in `servers`' own committed `flake.lock`.
+- `update-<name>` adds `--override-input k3s-cluster github:Clusterforgers/k3s-cluster`, which fetches `k3s-cluster`'s latest HEAD directly for that one build, bypassing whatever's actually locked. Good for fast iteration, but it's ephemeral, it doesn't update `servers`' `flake.lock`. To make a `k3s-cluster` change the new durable default for everyone's `rebuild-<name>`, bump the lock for real: `cd` into a local checkout of `servers`, run `nix flake update k3s-cluster`, then commit and push `flake.lock`.
+
 ---
 
 ## Moving the Control Plane
 
-This cluster uses k3s's embedded SQLite datastore, no etcd, no HA. That means all cluster state, every namespace, Secret, Longhorn volume record, and the node join token, lives in one directory on whichever node has `"role": "control-plane"`: `/var/lib/rancher/k3s/server`. Moving the control plane means relocating that directory to the new node, not bootstrapping a fresh cluster and restoring apps into it. Done this way, there's no ArgoCD resync and no per-app data restore to do, the existing cluster just continues running on new hardware, and agents rejoin with the token they already have.
+This cluster uses k3s's embedded SQLite datastore, no etcd, no HA. That means all cluster state, every namespace, Secret, Longhorn volume record, and the node join token, lives in one directory on whichever node has `"role": "control-plane"`: `/var/lib/rancher/k3s/server`. Moving the control plane means relocating that directory to the new node, not bootstrapping a fresh cluster and restoring apps into it. Done this way, there's no ArgoCD resync and no per-app data restore to do, the existing cluster just continues running on new hardware.
 
 **Do the config edit first, but don't rebuild anything until Step 6** — the old node keeps serving as control-plane while you stage the copy.
 
-**Step 1 — Update `cluster-vars.json`** with the new node's role flipped to `"control-plane"` (and the old one to `"agent"`).
+**Step 1 — Make the config change and get it live.** This is the step most likely to silently not work, verify each part:
+1. Flip the roles in `cluster-vars.json` (new node → `"control-plane"`, old node → `"agent"`). Check the new control-plane candidate actually has a `tailscaleIp` (required) — an extra field like oracle's `vcnIp` is optional and only changes what `--node-external-ip` advertises; without it, `server.nix` falls back to `tailscaleIp`.
+2. Commit and push `k3s-cluster`.
+3. Bump `servers`' own lock so it points at that new commit — this is the step that's easy to get wrong. It must run inside an actual local checkout of the **`servers`** repo specifically, not some other flake (e.g. an unrelated personal NixOS config) that happens to also depend on `k3s-cluster` — updating the wrong flake's lock will look like it succeeded but silently does nothing for the cluster:
+   ```sh
+   cd /path/to/servers
+   nix flake update k3s-cluster
+   git add flake.lock && git commit -m "Update k3s-cluster input" && git push
+   ```
+   If `git status` shows nothing to commit after `nix flake update k3s-cluster`, that means the lock was already current, not that the command failed.
 
 **Step 2 — Stop k3s on the old control-plane node:**
 ```sh
@@ -83,11 +96,17 @@ scp ~/k3s-server-backup.tar.gz <new-sshAlias>:/root/
 ssh <new-sshAlias> 'mkdir -p /var/lib/rancher/k3s && tar xzf /root/k3s-server-backup.tar.gz -C /var/lib/rancher/k3s'
 ```
 
-**Step 6 — Apply the role swap and rebuild the new control plane:**
+**Step 6 — Rebuild the new control plane:**
 ```sh
-update-<new-name>   # or rebuild-<new-name> if the flake lock is already current
+rebuild-<new-name>
 ```
-k3s comes up in server mode on the copied datastore, same cluster CA, certs, node token, and objects as before. Its TLS listener automatically adds the new node's `ip`/`tailscaleIp` as SANs from the flags already in `server.nix`, no manual cert regeneration needed.
+`rebuild-<name>` always fetches `servers`' latest commit (`--refresh` is baked into the alias), so as long as Step 1 actually landed, this deploys it. k3s comes up in server mode on the copied datastore, same cluster CA, certs, node token, and objects as before. Its TLS listener automatically adds the new node's `ip`/`tailscaleIp` as SANs from the flags already in `server.nix`, no manual cert regeneration needed.
+
+If the command exits non-zero, don't assume the switch failed outright, some unit reload failures (e.g. `dbus-broker` timing out on a reload) can make `nixos-rebuild` report failure even though activation otherwise completed. Check directly instead of trusting the exit code:
+```sh
+ssh <new-sshAlias> 'systemctl status k3s --no-pager'
+kubectl get nodes
+```
 
 **Step 7 — Verify before touching the old node:**
 ```sh
@@ -95,13 +114,18 @@ fetch-kubeconfig <new-sshAlias>
 k9s   # confirm both nodes, all namespaces, and all workloads are present
 ```
 
-**Step 8 — Rebuild the old node as an agent:**
+**Step 8 — Give the old node a join token, then rebuild it as an agent.** The token *value* came along with the copied datastore (it's the same cluster secret it always was), but the file it needs — `/var/lib/rancher/k3s/cluster-token` — has never existed on this node before, since it was a server, not an agent. `bootstrap-node` writes it, fetching from whichever node `cluster-vars.json` currently marks as control-plane (the new one, after Step 1):
 ```sh
-update-<old-name>
+bootstrap-node <old-node-tailscaleIp> <old-node-sshUser>
+rebuild-<old-name>
 ```
-The join token came along with the copied datastore, so the old node rejoins with the *same* token it always had, no need to re-run `bootstrap-node`.
+Watch the journal to confirm it actually joined the right control plane, not a stale cached address:
+```sh
+ssh <old-sshAlias> 'journalctl -u k3s -n 20 --no-pager'
+```
+It should reference the new control plane's `tailscaleIp`. If it's still pointing at the old node, the config that got deployed isn't the one you think it is, go back and check Step 1.
 
-**Step 9 — Clean up.** The old node's `/var/lib/rancher/k3s/server` directory is now unused (agent state lives under `/var/lib/rancher/k3s/agent` instead) and can be removed once the cutover looks stable. Delete the local backup tarball once you're satisfied, or keep it somewhere safe a while longer.
+**Step 9 — Clean up.** The old node's `/var/lib/rancher/k3s/server` directory is now unused (agent state lives under `/var/lib/rancher/k3s/agent` instead) and can be removed once the cutover looks stable. Delete the local backup tarball once you're satisfied, or keep it somewhere safe a while longer. The old node's `kubectl get nodes` `ROLES` column will keep showing `control-plane` too, that's a stale Kubernetes Node label k3s doesn't auto-clear on a role change, harmless, and removable with `kubectl label node <old-name> node-role.kubernetes.io/control-plane-` if it bothers you.
 
 Longhorn volume *data* isn't part of any of this, it's already replicated independently across nodes and unaffected by which node runs the API server.
 
