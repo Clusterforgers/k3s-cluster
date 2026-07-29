@@ -11,7 +11,7 @@ in {
     services.k3s = {
       enable = true;
       role = "agent";
-      serverAddr = "https://${controlPlane.ip}:6443";
+      serverAddr = "https://${controlPlane.tailscaleIp}:6443";
       tokenFile = "/var/lib/rancher/k3s/cluster-token";
       extraFlags = toString [
         "--flannel-iface tailscale0"
