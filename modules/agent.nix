@@ -18,7 +18,7 @@ in {
       tokenFile = "/var/lib/rancher/k3s/cluster-token";
       extraFlags = toString [
         "--node-ip ${thisNode.tailscaleIp}"
-        "--node-external-ip ${thisNode.vcnIp or thisNode.tailscaleIp}"
+        "--node-external-ip ${thisNode.tailscaleIp}"
         "--flannel-iface tailscale0"
       ];
     };
