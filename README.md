@@ -43,7 +43,7 @@ All server configuration lives in `modules/cluster-vars.json`. Append an entry t
 | `name` | Used as suffix for shell aliases (`rebuild-<name>`, `update-<name>`, `clean-<name>`) |
 | `nixosAttr` | The `nixosConfigurations.<attr>` key in the `Clusterforgers/servers` flake |
 | `sshAlias` | The SSH `Host` entry written to `~/.ssh/config` |
-| `ip` | Public IP, only used for TLS SANs, kubeconfig patching, and the one-time initial bootstrap before the node is on the tailnet |
+| `ip` | Public IP, only used for TLS SANs and the one-time initial bootstrap before the node is on the tailnet |
 | `tailscaleIp` | Tailscale IP, all steady-state SSH, builds, and cluster traffic use this |
 | `sshUser` | SSH user for the server (usually `root`) |
 | `role` | `"control-plane"` or `"agent"`, scripts use this to find the right server automatically |

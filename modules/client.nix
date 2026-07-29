@@ -3,7 +3,7 @@
   controlPlane = builtins.head (builtins.filter (s: s.role == "control-plane") vars.servers);
   serversFlake = "github:Clusterforgers/servers";
   serverCases = builtins.concatStringsSep "\n" (map (
-      s: "      ${s.sshAlias}) SERVER_IP=\"${s.ip}\" ;;"
+      s: "      ${s.sshAlias}) SERVER_IP=\"${s.tailscaleIp}\" ;;"
     )
     vars.servers);
   serverNames = builtins.concatStringsSep ", " (map (s: s.sshAlias) vars.servers);
