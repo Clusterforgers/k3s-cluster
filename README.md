@@ -56,6 +56,14 @@ After editing, run `rebuild` on your local machine to apply the new SSH config a
 
 ---
 
+## Adding a Worker Node (Agent)
+
+See [`adding-an-agent-node.md`](./adding-an-agent-node.md) — walks through a blank machine end to end: install NixOS, register it in `cluster-vars.json` with a placeholder `tailscaleIp`, first deploy straight from `github:Clusterforgers/servers#<attr> --refresh`, bring Tailscale up, fill in the real `tailscaleIp` once you have it, then `bootstrap-node` to actually join the cluster.
+
+From there, moving a workload onto it (e.g. pinning Minecraft here for local disk access) is the "Moving a workload to a new node" workflow documented in `k3s-cluster-manifests`' README, it's a Longhorn/`nodeSelector` concern, unrelated to anything in this repo.
+
+---
+
 ## Moving the Control Plane
 
 This cluster uses k3s's embedded SQLite datastore, no etcd, no HA. That means all cluster state, every namespace, Secret, Longhorn volume record, and the node join token, lives in one directory on whichever node has `"role": "control-plane"`: `/var/lib/rancher/k3s/server`. Moving the control plane means relocating that directory to the new node, not bootstrapping a fresh cluster and restoring apps into it. Done this way, there's no ArgoCD resync and no per-app data restore to do, the existing cluster just continues running on new hardware.
