@@ -3,7 +3,10 @@ let
   vars = builtins.fromJSON (builtins.readFile ./cluster-vars.json);
   controlPlane = builtins.head (builtins.filter (s: s.role == "control-plane") vars.servers);
 in {
-  flake.nixosModules.kubernetes-agent = { pkgs, config, ... }: {
+  flake.nixosModules.kubernetes-agent = { pkgs, config, ... }:
+  let
+    thisNode = builtins.head (builtins.filter (s: s.name == config.networking.hostName) vars.servers);
+  in {
     services.tailscale.enable = true;
 
     networking.firewall.trustedInterfaces = ["tailscale0"];
@@ -14,6 +17,8 @@ in {
       serverAddr = "https://${controlPlane.tailscaleIp}:6443";
       tokenFile = "/var/lib/rancher/k3s/cluster-token";
       extraFlags = toString [
+        "--node-ip ${thisNode.tailscaleIp}"
+        "--node-external-ip ${thisNode.vcnIp or thisNode.tailscaleIp}"
         "--flannel-iface tailscale0"
       ];
     };
