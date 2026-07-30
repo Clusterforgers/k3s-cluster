@@ -19,6 +19,15 @@
       "tailscaleIp": "100.96.184.94",
       "sshUser": "root",
       "role": "control-plane"
+    },
+    {
+    "name": "bullet",
+    "nixosAttr": "bullet",
+    "sshAlias": "bullet",
+    "ip": "192.168.50.39",
+    "tailscaleIp": "<placeholder for now>",
+    "sshUser": "root",
+    "role": "agent"
     }
   ]
 }
