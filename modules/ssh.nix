@@ -1,5 +1,18 @@
-{ self, ... }: let
+{ self, lib, ... }: let
   vars = builtins.fromJSON (builtins.readFile ./cluster-vars.json);
+
+  isValidIp = ip: builtins.isString ip && builtins.match "[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}" ip != null;
+
+  # New nodes carry a placeholder tailscaleIp until Tailscale is up on them
+  # (see adding-an-agent-node.md). Rendering that straight into ~/.ssh/config
+  # produces an invalid HostName line, which aborts parsing of the *entire*
+  # file for every host, not just this one. Skip and warn instead.
+  serversWithIp = builtins.filter (
+    server:
+      isValidIp server.tailscaleIp
+      || lib.warn "ssh.nix: skipping SSH host '${server.sshAlias}' — tailscaleIp is missing or invalid (${builtins.toJSON server.tailscaleIp})" false
+  )
+  vars.servers;
 in {
   flake.homeModules.ssh = { config, lib, ... }: {
     programs.ssh = {
@@ -20,7 +33,7 @@ in {
               User = server.sshUser;
             };
           })
-          vars.servers);
+          serversWithIp);
     };
   };
 }
