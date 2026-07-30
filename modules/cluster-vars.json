@@ -25,7 +25,7 @@
     "nixosAttr": "bullet",
     "sshAlias": "bullet",
     "ip": "192.168.50.39",
-    "tailscaleIp": "<placeholder for now>",
+    "tailscaleIp": "100.96.7.66",
     "sshUser": "root",
     "role": "agent"
     }
