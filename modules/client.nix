@@ -156,76 +156,85 @@
     fi
   '';
 
-  # Deploying over Tailscale means activation restarts tailscaled, which tears
-  # down the interface the SSH session rides on. nixos-rebuild runs activation
-  # under systemd-run, so it completes on the host regardless - but we lose the
-  # channel carrying its exit status and see a transport failure (255) instead.
-  # A non-zero exit is therefore not proof of failure: reconnect and compare
-  # /run/current-system against the toplevel we just built.
+  # Activation restarts tailscaled / NetworkManager, which tears down the very
+  # link the deploy runs over. nixos-rebuild wraps activation in `systemd-run
+  # --pipe`, whose transient unit dies with the SSH session - so a dropped
+  # connection could kill activation midway, leaving units stopped and never
+  # started again. Instead: stage with `boot` (restarts nothing, so the link is
+  # safe), then run the switch fully detached and poll for the result.
   deployHelpers = ''
+    SSH_OPTS='-o ControlMaster=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4'
+
+    host_ssh() {
+      target=$1
+      shift
+      # shellcheck disable=SC2086
+      ssh $SSH_OPTS -o ConnectTimeout=10 -o BatchMode=yes "$target" "$@"
+    }
+
     expected_toplevel() {
       nix eval --raw --impure "$REPO#nixosConfigurations.$1.config.system.build.toplevel"
     }
 
-    activated_toplevel() {
-      ssh -o ControlMaster=no -o ConnectTimeout=10 -o BatchMode=yes "$1" \
-        readlink -f /run/current-system 2>/dev/null
-    }
-
-    # /run/current-system is set before unit restarts finish, so a match proves
-    # the config was activated, not that every unit came back healthy.
     report_failed_units() {
-      failed=$(ssh -o ControlMaster=no -o ConnectTimeout=10 -o BatchMode=yes "$1" \
-        systemctl --failed --no-legend --plain 2>/dev/null | cut -d' ' -f1) || return 0
+      failed=$(host_ssh "$1" systemctl --failed --no-legend --plain 2>/dev/null | cut -d' ' -f1) || return 0
       if [ -n "$failed" ]; then
         echo "    warning: units in a failed state on $1:" >&2
         printf '      %s\n' $failed >&2
       fi
     }
 
-    confirm_activation() {
+    # Build, copy, install the bootloader and point the system profile at the
+    # new generation. Activates nothing, so this can never drop the connection.
+    stage_host() {
+      echo "--> stage $1 ($2)"
+      NIX_SSHOPTS="$SSH_OPTS" nixos-rebuild boot \
+        --flake "$REPO#$1" \
+        --target-host "$2" --build-host "$2" --impure
+    }
+
+    # Run switch-to-configuration detached on the host, then poll. The
+    # connection dropping mid-switch is expected here and no longer fatal.
+    activate_host() {
       attr=$1
       host=$2
+      echo "--> activate $attr ($host)"
+
       if ! expected=$(expected_toplevel "$attr"); then
-        echo "    could not evaluate the expected system for $attr" >&2
+        echo "error: could not evaluate the expected system for $attr" >&2
         return 1
       fi
 
-      echo "    lost the connection; checking whether $host activated anyway..."
+      host_ssh "$host" systemd-run --collect --no-block \
+        --unit=cluster-switch --service-type=oneshot \
+        /nix/var/nix/profiles/system/bin/switch-to-configuration switch
+
+      echo "    switching detached; waiting for $host to report the new system..."
       tries=0
-      while [ "$tries" -lt 30 ]; do
+      while [ "$tries" -lt 60 ]; do
         tries=$((tries + 1))
         sleep 5
-        actual=$(activated_toplevel "$host") || continue
-        [ -n "$actual" ] || continue
-        if [ "$actual" = "$expected" ]; then
-          echo "    $host is back on the new system; activation completed."
-          report_failed_units "$host"
-          return 0
+        actual=$(host_ssh "$host" readlink -f /run/current-system 2>/dev/null) || continue
+        [ "$actual" = "$expected" ] || continue
+        # /run/current-system flips before unit restarts finish, so also wait
+        # for the detached switch unit itself to be gone.
+        if host_ssh "$host" systemctl is-active --quiet cluster-switch.service 2>/dev/null; then
+          continue
         fi
-        echo "    $host is reachable but running:" >&2
-        echo "      $actual" >&2
-        echo "    expected:" >&2
-        echo "      $expected" >&2
-        return 1
+        echo "    $host activated."
+        report_failed_units "$host"
+        return 0
       done
 
-      echo "    $host did not come back within 150s" >&2
+      echo "error: $host did not report the new system within 300s" >&2
+      echo "       inspect: ssh $host journalctl -u cluster-switch -n 50" >&2
       return 1
     }
 
     deploy_host() {
-      attr=$1
-      host=$2
-      echo "==> $attr ($host)"
-      set +e
-      NIX_SSHOPTS='-o ControlMaster=no' nixos-rebuild switch \
-        --flake "$REPO#$attr" \
-        --target-host "$host" --build-host "$host" --impure
-      rc=$?
-      set -e
-      [ "$rc" -eq 0 ] && return 0
-      confirm_activation "$attr" "$host"
+      echo "==> $1 ($2)"
+      stage_host "$1" "$2"
+      activate_host "$1" "$2"
     }
   '';
   serverCases = builtins.concatStringsSep "\n" (map (
@@ -369,14 +378,11 @@ in {
         fi
 
         echo
-        echo "==> Phase 1/2: building every host (nothing is activated yet)"
+        echo "==> Phase 1/2: staging every host (nothing is activated yet)"
         for entry in ${hostArgs}; do
           attr="''${entry%%:*}"
           host="''${entry##*:}"
-          echo "--> build $attr ($host)"
-          if ! NIX_SSHOPTS='-o ControlMaster=no' nixos-rebuild dry-activate \
-              --flake "$REPO#$attr" \
-              --target-host "$host" --build-host "$host" --impure; then
+          if ! stage_host "$attr" "$host"; then
             echo >&2
             echo "error: $attr failed to build; no host was activated" >&2
             git checkout -- flake.lock
@@ -391,7 +397,7 @@ in {
         for entry in ${hostArgs}; do
           attr="''${entry%%:*}"
           host="''${entry##*:}"
-          if ! deploy_host "$attr" "$host"; then
+          if ! activate_host "$attr" "$host"; then
             echo >&2
             echo "error: $attr failed to activate" >&2
             echo "       activated so far:''${activated:- (none)}" >&2
