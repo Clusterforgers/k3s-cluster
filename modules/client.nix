@@ -12,6 +12,7 @@
     CONFIG_FILE="$CONFIG_DIR/servers-repo"
     REPO=""
     RECONFIGURE=0
+    SKIP=""
 
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -21,11 +22,17 @@
           shift 2
           ;;
         --reconfigure) RECONFIGURE=1; shift ;;
+        --skip)
+          [ -n "''${2:-}" ] || { echo "error: --skip needs a host name" >&2; exit 1; }
+          SKIP="''${SKIP:+$SKIP,}$2"
+          shift 2
+          ;;
         -h|--help)
-          echo "usage: ${cmd} [--repo <path>] [--reconfigure]"
+          echo "usage: ${cmd} [--repo <path>] [--reconfigure] [--skip <host>]"
           echo
           echo "  --repo <path>   use this Clusterforgers/servers checkout for this run"
           echo "  --reconfigure   forget the remembered checkout and ask again"
+          echo "  --skip <host>   (cluster commands) leave this host out; repeatable"
           echo
           echo "The checkout path is remembered in $CONFIG_FILE."
           exit 0
@@ -231,6 +238,13 @@
       return 1
     }
 
+
+    host_skipped() {
+      case ",$SKIP," in
+        *",$1,"*) return 0 ;;
+        *) return 1 ;;
+      esac
+    }
     deploy_host() {
       echo "==> $1 ($2)"
       stage_host "$1" "$2"
@@ -324,6 +338,8 @@ in {
         ${deployHelpers}
 
         for entry in ${hostArgs}; do
+          attr="''${entry%%:*}"
+          host_skipped "$attr" && { echo "==> skipping $attr (--skip)"; continue; }
           deploy_host "''${entry%%:*}" "''${entry##*:}"
         done
       '')
@@ -382,6 +398,7 @@ in {
         for entry in ${hostArgs}; do
           attr="''${entry%%:*}"
           host="''${entry##*:}"
+          host_skipped "$attr" && { echo "--> skipping $attr (--skip)"; continue; }
           if ! stage_host "$attr" "$host"; then
             echo >&2
             echo "error: $attr failed to build; no host was activated" >&2
@@ -397,6 +414,7 @@ in {
         for entry in ${hostArgs}; do
           attr="''${entry%%:*}"
           host="''${entry##*:}"
+          host_skipped "$attr" && { echo "--> skipping $attr (--skip)"; continue; }
           if ! activate_host "$attr" "$host"; then
             echo >&2
             echo "error: $attr failed to activate" >&2
@@ -417,16 +435,27 @@ in {
         fi
 
         echo
-        echo "==> All hosts activated; recording lock in git"
+        if [ -n "$SKIP" ]; then
+          echo "==> Deployed hosts activated (skipped: $SKIP); recording lock in git"
+        else
+          echo "==> All hosts activated; recording lock in git"
+        fi
         {
           printf 'flake: bump inputs\n\n'
           grep -v '^warning:' "$summary" || true
           printf '\nDeployed to:%s\n' "$activated"
+          if [ -n "$SKIP" ]; then printf 'Skipped (NOT deployed): %s\n' "$SKIP"; fi
         } > "$summary.msg"
         git add flake.lock
         git commit -F "$summary.msg"
         git push origin "$BRANCH"
-        echo "==> Done. origin/$BRANCH now records exactly what is running."
+        if [ -n "$SKIP" ]; then
+          echo "==> Done. origin/$BRANCH records the lock, but $SKIP was NOT deployed"
+          echo "    and is still on its old system. Deploy it with rebuild-<host>"
+          echo "    once it is reachable."
+        else
+          echo "==> Done. origin/$BRANCH now records exactly what is running."
+        fi
       '')
     ]
     ++ (map (server:
