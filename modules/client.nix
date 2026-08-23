@@ -154,12 +154,78 @@
     if working_tree_dirty; then
       echo "==> Note: deploying uncommitted local changes"
     fi
+  '';
+
+  # Deploying over Tailscale means activation restarts tailscaled, which tears
+  # down the interface the SSH session rides on. nixos-rebuild runs activation
+  # under systemd-run, so it completes on the host regardless - but we lose the
+  # channel carrying its exit status and see a transport failure (255) instead.
+  # A non-zero exit is therefore not proof of failure: reconnect and compare
+  # /run/current-system against the toplevel we just built.
+  deployHelpers = ''
+    expected_toplevel() {
+      nix eval --raw --impure "$REPO#nixosConfigurations.$1.config.system.build.toplevel"
+    }
+
+    activated_toplevel() {
+      ssh -o ControlMaster=no -o ConnectTimeout=10 -o BatchMode=yes "$1" \
+        readlink -f /run/current-system 2>/dev/null
+    }
+
+    # /run/current-system is set before unit restarts finish, so a match proves
+    # the config was activated, not that every unit came back healthy.
+    report_failed_units() {
+      failed=$(ssh -o ControlMaster=no -o ConnectTimeout=10 -o BatchMode=yes "$1" \
+        systemctl --failed --no-legend --plain 2>/dev/null | cut -d' ' -f1) || return 0
+      if [ -n "$failed" ]; then
+        echo "    warning: units in a failed state on $1:" >&2
+        printf '      %s\n' $failed >&2
+      fi
+    }
+
+    confirm_activation() {
+      attr=$1
+      host=$2
+      if ! expected=$(expected_toplevel "$attr"); then
+        echo "    could not evaluate the expected system for $attr" >&2
+        return 1
+      fi
+
+      echo "    lost the connection; checking whether $host activated anyway..."
+      tries=0
+      while [ "$tries" -lt 30 ]; do
+        tries=$((tries + 1))
+        sleep 5
+        actual=$(activated_toplevel "$host") || continue
+        [ -n "$actual" ] || continue
+        if [ "$actual" = "$expected" ]; then
+          echo "    $host is back on the new system; activation completed."
+          report_failed_units "$host"
+          return 0
+        fi
+        echo "    $host is reachable but running:" >&2
+        echo "      $actual" >&2
+        echo "    expected:" >&2
+        echo "      $expected" >&2
+        return 1
+      done
+
+      echo "    $host did not come back within 150s" >&2
+      return 1
+    }
 
     deploy_host() {
-      echo "==> $1 ($2)"
+      attr=$1
+      host=$2
+      echo "==> $attr ($host)"
+      set +e
       NIX_SSHOPTS='-o ControlMaster=no' nixos-rebuild switch \
-        --flake "$REPO#$1" \
-        --target-host "$2" --build-host "$2" --impure
+        --flake "$REPO#$attr" \
+        --target-host "$host" --build-host "$host" --impure
+      rc=$?
+      set -e
+      [ "$rc" -eq 0 ] && return 0
+      confirm_activation "$attr" "$host"
     }
   '';
   serverCases = builtins.concatStringsSep "\n" (map (
@@ -246,6 +312,7 @@ in {
         ${repoPreamble "rebuild-cluster"}
         ${gitSyncHelpers}
         ${syncGate}
+        ${deployHelpers}
 
         for entry in ${hostArgs}; do
           deploy_host "''${entry%%:*}" "''${entry##*:}"
@@ -257,6 +324,7 @@ in {
 
         ${repoPreamble "update-cluster"}
         ${gitSyncHelpers}
+        ${deployHelpers}
 
         cd "$REPO"
 
@@ -323,10 +391,7 @@ in {
         for entry in ${hostArgs}; do
           attr="''${entry%%:*}"
           host="''${entry##*:}"
-          echo "--> switch $attr ($host)"
-          if ! NIX_SSHOPTS='-o ControlMaster=no' nixos-rebuild switch \
-              --flake "$REPO#$attr" \
-              --target-host "$host" --build-host "$host" --impure; then
+          if ! deploy_host "$attr" "$host"; then
             echo >&2
             echo "error: $attr failed to activate" >&2
             echo "       activated so far:''${activated:- (none)}" >&2
@@ -365,6 +430,7 @@ in {
         ${repoPreamble "rebuild-${server.name}"}
         ${gitSyncHelpers}
         ${syncGate}
+        ${deployHelpers}
 
         deploy_host ${server.nixosAttr} ${server.sshAlias}
       '')
