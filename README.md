@@ -40,7 +40,7 @@ All server configuration lives in `modules/cluster-vars.json`. Append an entry t
 
 | Field | Description |
 |-------|-------------|
-| `name` | Used as suffix for shell aliases (`rebuild-<name>`, `update-<name>`, `clean-<name>`) |
+| `name` | Used as suffix for shell aliases (`rebuild-<name>`, `clean-<name>`) |
 | `nixosAttr` | The `nixosConfigurations.<attr>` key in the `Clusterforgers/servers` flake |
 | `sshAlias` | The SSH `Host` entry written to `~/.ssh/config` |
 | `ip` | Public IP, only used for TLS SANs and the one-time initial bootstrap before the node is on the tailnet |
@@ -50,9 +50,21 @@ All server configuration lives in `modules/cluster-vars.json`. Append an entry t
 
 After editing, run `rebuild` on your local machine to apply the new SSH config and generate the new aliases.
 
-`rebuild-<name>` and `update-<name>` both target `github:Clusterforgers/servers`, an unpinned flake ref, with `--refresh` so they always fetch its latest commit rather than a stale locally-cached tarball (Nix caches unpinned `github:` refs for up to an hour otherwise). The difference between them is `k3s-cluster`, not `servers`:
-- `rebuild-<name>` deploys whatever `k3s-cluster` commit is currently locked in `servers`' own committed `flake.lock`.
-- `update-<name>` adds `--override-input k3s-cluster github:Clusterforgers/k3s-cluster`, which fetches `k3s-cluster`'s latest HEAD directly for that one build, bypassing whatever's actually locked. Good for fast iteration, but it's ephemeral, it doesn't update `servers`' `flake.lock`. To make a `k3s-cluster` change the new durable default for everyone's `rebuild-<name>`, bump the lock for real: `cd` into a local checkout of `servers`, run `nix flake update k3s-cluster`, then commit and push `flake.lock`.
+### Commands
+
+All deploy commands run against a local `Clusterforgers/servers` checkout, resolved via `--repo <path>`, `$SERVERS_REPO`, or a remembered path in `$XDG_CONFIG_HOME/clusterforgers/servers-repo`.
+
+| Command | Scope | What it does |
+|---------|-------|--------------|
+| `rebuild-<name>` | one host | Fast-forwards the checkout to `origin/main`, then stages and activates it |
+| `rebuild-cluster` | all hosts | Same, each host in turn |
+| `update-cluster` | all hosts | `nix flake update`, stages every host, activates, then commits and pushes `flake.lock` |
+| `clean-<name>` | one host | `nix-collect-garbage -d` |
+| `clean-cluster` | all hosts | `nix-collect-garbage -d` everywhere |
+
+The three cluster-wide commands take a repeatable `--skip <host>`.
+
+`clean-cluster` is the only one that doesn't stop at the first failure: an unreachable host is a warning, the rest are still cleaned, and it exits non-zero listing what it missed.
 
 ---
 
@@ -108,7 +120,7 @@ ssh <new-sshAlias> 'mkdir -p /var/lib/rancher/k3s && tar xzf /root/k3s-server-ba
 ```sh
 rebuild-<new-name>
 ```
-`rebuild-<name>` always fetches `servers`' latest commit (`--refresh` is baked into the alias), so as long as Step 1 actually landed, this deploys it. k3s comes up in server mode on the copied datastore, same cluster CA, certs, node token, and objects as before. Its TLS listener automatically adds the new node's `ip`/`tailscaleIp` as SANs from the flags already in `server.nix`, no manual cert regeneration needed.
+`rebuild-<name>` fast-forwards the checkout to `origin/main` before deploying, so as long as Step 1 actually landed, this deploys it. k3s comes up in server mode on the copied datastore, same cluster CA, certs, node token, and objects as before. Its TLS listener automatically adds the new node's `ip`/`tailscaleIp` as SANs from the flags already in `server.nix`, no manual cert regeneration needed.
 
 If the command exits non-zero, don't assume the switch failed outright, some unit reload failures (e.g. `dbus-broker` timing out on a reload) can make `nixos-rebuild` report failure even though activation otherwise completed. Check directly instead of trusting the exit code:
 ```sh

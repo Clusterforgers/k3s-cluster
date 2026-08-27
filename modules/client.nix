@@ -256,6 +256,8 @@
     )
     vars.servers);
   serverNames = builtins.concatStringsSep ", " (map (s: s.sshAlias) vars.servers);
+  cleanHostArgs = builtins.concatStringsSep " " (map (s: "${s.name}:${s.sshAlias}") vars.servers);
+  cleanNames = builtins.concatStringsSep ", " (map (s: s.name) vars.servers);
   serverAliases = builtins.listToAttrs (map (server: {
       name = "clean-${server.name}";
       value = "ssh ${server.sshAlias} 'sudo nix-collect-garbage -d'";
@@ -456,6 +458,67 @@ in {
         else
           echo "==> Done. origin/$BRANCH now records exactly what is running."
         fi
+      '')
+
+      # Every other cluster-wide command aborts on the first failure, but a GC
+      # sweep has no ordering to protect: one unreachable host should not stop
+      # the others from being cleaned. Failures are collected, reported at the
+      # end, and reflected in the exit status instead.
+      (writeShellScriptBin "clean-cluster" ''
+        set -euo pipefail
+
+        SKIP=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --skip)
+              [ -n "''${2:-}" ] || { echo "error: --skip needs a host name" >&2; exit 1; }
+              SKIP="''${SKIP:+$SKIP,}$2"
+              shift 2
+              ;;
+            -h|--help)
+              echo "usage: clean-cluster [--skip <host>]"
+              echo
+              echo "Runs 'nix-collect-garbage -d' on every host: the cluster-wide"
+              echo "counterpart to the per-host clean-<name> aliases."
+              echo
+              echo "  --skip <host>   leave this host out; repeatable"
+              echo
+              echo "Hosts: ${cleanNames}"
+              exit 0
+              ;;
+            *) echo "error: unknown option: $1" >&2; exit 1 ;;
+          esac
+        done
+
+        host_skipped() {
+          case ",$SKIP," in
+            *",$1,"*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
+
+        failures=""
+        for entry in ${cleanHostArgs}; do
+          name="''${entry%%:*}"
+          host="''${entry##*:}"
+          host_skipped "$name" && { echo "==> skipping $name (--skip)"; continue; }
+
+          echo "==> $name ($host)"
+          if ! ssh -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
+                   "$host" 'sudo nix-collect-garbage -d'; then
+            echo "    warning: garbage collection failed on $name" >&2
+            failures="$failures $name"
+          fi
+        done
+
+        if [ -n "$failures" ]; then
+          echo >&2
+          echo "error: garbage collection did not run on:$failures" >&2
+          exit 1
+        fi
+
+        echo
+        echo "==> Done. Every host garbage-collected."
       '')
     ]
     ++ (map (server:
