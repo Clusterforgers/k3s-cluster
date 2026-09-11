@@ -332,21 +332,32 @@ in {
       '')
 
       # Headlamp is a NodePort on the tailnet, not an Ingress host, so unlike
-      # open-k3s-monitoring there is no tunnel to hold open here, this only
-      # mints a login token. Tokens expire; rerun to get another.
+      # open-k3s-monitoring there is no tunnel to hold open here. This reads the
+      # standing non-expiring token out of the cluster rather than minting one:
+      # `kubectl create token` can only issue bounded tokens, so a fresh one
+      # every run would mean re-pasting on every device it was handed to.
       (writeShellScriptBin "open-headlamp" ''
         set -e
 
         URL="http://${controlPlane.tailscaleIp}:30080"
 
-        echo "Minting a Headlamp login token..."
-        TOKEN=$(kubectl create token headlamp -n headlamp --duration=24h)
+        TOKEN=$(kubectl get secret headlamp-token -n headlamp \
+          -o jsonpath='{.data.token}' 2>/dev/null | base64 -d) || true
+
+        if [ -z "$TOKEN" ]; then
+          echo "error: no token in secret/headlamp-token (namespace headlamp)" >&2
+          echo "       if the app was only just synced, the token controller" >&2
+          echo "       may still be filling it in; retry in a few seconds." >&2
+          echo "       otherwise check: kubectl -n headlamp get secret headlamp-token" >&2
+          exit 1
+        fi
 
         echo "----------------------------------------"
         echo "URL:   $URL"
         echo "Token: $TOKEN"
         echo "----------------------------------------"
-        echo "Paste the token into Headlamp's sign-in prompt. Valid 24h."
+        echo "Paste into Headlamp's sign-in prompt. The token does not expire,"
+        echo "so each device only needs this once."
         echo "----------------------------------------"
       '')
 
