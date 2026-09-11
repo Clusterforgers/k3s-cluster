@@ -331,6 +331,25 @@ in {
         kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
       '')
 
+      # Headlamp is a NodePort on the tailnet, not an Ingress host, so unlike
+      # open-k3s-monitoring there is no tunnel to hold open here, this only
+      # mints a login token. Tokens expire; rerun to get another.
+      (writeShellScriptBin "open-headlamp" ''
+        set -e
+
+        URL="http://${controlPlane.tailscaleIp}:30080"
+
+        echo "Minting a Headlamp login token..."
+        TOKEN=$(kubectl create token headlamp -n headlamp --duration=24h)
+
+        echo "----------------------------------------"
+        echo "URL:   $URL"
+        echo "Token: $TOKEN"
+        echo "----------------------------------------"
+        echo "Paste the token into Headlamp's sign-in prompt. Valid 24h."
+        echo "----------------------------------------"
+      '')
+
       (writeShellScriptBin "rebuild-cluster" ''
         set -euo pipefail
 

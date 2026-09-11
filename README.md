@@ -10,7 +10,7 @@ This repo provides reusable NixOS/home-manager modules. The actual deployable se
 |------|---------|
 | `modules/cluster-vars.json` | Single source of truth for all servers (IPs, SSH aliases, roles) |
 | `modules/ssh.nix` | Generates SSH client config entries for every server in the list (routed over Tailscale) |
-| `modules/client.nix` | CLI tools + scripts for developer machines (`kubectl`, `k9s`, `fetch-kubeconfig`, `bootstrap-node`) |
+| `modules/client.nix` | CLI tools + scripts for developer machines (`kubectl`, `k9s`, `fetch-kubeconfig`, `bootstrap-node`, `open-k3s-monitoring`, `open-headlamp`) |
 | `modules/server.nix` | K3s control plane config + Tailscale hardening, apply to the server with `"role": "control-plane"` |
 | `modules/agent.nix` | K3s worker node config + Tailscale hardening, joins the control plane via Tailscale |
 | `modules/deployments.nix` | Core cluster infrastructure (Prometheus, ArgoCD) bootstrapped onto the control plane |
