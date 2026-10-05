@@ -361,6 +361,58 @@ in {
         echo "----------------------------------------"
       '')
 
+      # Stoat has no admin UI for invites, so codes go straight into Mongo's
+      # account_invites collection. Each code is single-use: on signup Stoat
+      # marks it `used` and records the account in `claimed_by`.
+      (writeShellScriptBin "stoat-invite" ''
+        set -euo pipefail
+
+        mongo() {
+          kubectl -n stoat exec deploy/database -- mongosh revolt --quiet --eval "$1"
+        }
+
+        case "''${1:-}" in
+          -h|--help)
+            echo "usage: stoat-invite [<code>]   create an invite (random code if omitted)"
+            echo "       stoat-invite --list     show all invites and who claimed them"
+            exit 0
+            ;;
+          --list)
+            # Account and user ids are the same in Stoat, so claimed_by joins
+            # straight onto users for a readable name.
+            mongo '
+              db.account_invites.find().forEach(i => {
+                let who = "";
+                if (i.claimed_by) {
+                  const u = db.users.findOne({ _id: i.claimed_by });
+                  who = u ? u.username + "#" + u.discriminator : i.claimed_by;
+                }
+                print((i.used ? "used  " : "free  ") + i._id + (who ? "  -> " + who : ""));
+              })'
+            exit 0
+            ;;
+        esac
+
+        CODE="''${1:-$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 10 || true)}"
+        # The code is spliced into JavaScript below, so keep it to safe characters.
+        if ! printf '%s' "$CODE" | grep -Eq '^[A-Za-z0-9_-]{1,64}$'; then
+          echo "error: invite codes may only use letters, digits, '-' and '_'" >&2
+          exit 1
+        fi
+
+        if [ "$(mongo "db.account_invites.countDocuments({ _id: '$CODE' })")" != "0" ]; then
+          echo "error: invite '$CODE' already exists (see stoat-invite --list)" >&2
+          exit 1
+        fi
+        mongo "db.account_invites.insertOne({ _id: '$CODE' })" > /dev/null
+
+        HOST=$(kubectl -n stoat get ingress stoat -o jsonpath='{.spec.rules[0].host}')
+        echo "Invite created (single use). Send this:"
+        echo
+        echo "  Join us on Stoat: https://$HOST"
+        echo "  Click 'Create an account' and use invite code: $CODE"
+      '')
+
       (writeShellScriptBin "rebuild-cluster" ''
         set -euo pipefail
 
